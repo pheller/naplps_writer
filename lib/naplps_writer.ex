@@ -14,35 +14,23 @@
 # see <https://www.gnu.org/licenses/>.
 
 defmodule NaplpsWriter do
-
   @moduledoc """
   Documentation for `NaplpsWriter`.
   """
-
 
   use NaplpsConstants
 
   # Many commands and operands are single bytes, no calculation
   # What is happening will be obvious from the byte passed in
-  def append_byte(buffer, byte), do: buffer <> << byte >>
+  def append_byte(buffer, byte), do: buffer <> <<byte>>
 
   def append_bytes(buffer, bytes), do: buffer <> IO.iodata_to_binary(bytes)
-
-  defp prepend_sign(number, char_list) do
-    cond do
-      number < 0 -> [?1 | char_list]
-      true -> [?0 | char_list]
-    end
-  end
 
   ##################
   # Functions to do conversion of x and y co-ordinates into the multi-byte format that
   # NAPLPS requires.
   # The entry is mb_xy, as a single value or a list
   #
-
-  defp char_to_bit(?1), do: 1
-  defp char_to_bit(_), do: 0
 
   defp mb_buildxy(buffer, xys) when is_list(xys) and length(xys) < 3 do
     buffer
@@ -57,26 +45,24 @@ defmodule NaplpsWriter do
     mb_buildxy(buffer <> xybyte, rest)
   end
 
-  # Take a fraction, < 1, convert to a binary fraction as a string
-  # according to the conversion function. If the fraction is less than
-  # 0 then do a two's compliment on it and prepend a 1.
-  # Turn from a string into a list of bits for further processing
+  # Take a fraction in (-1, 1) and return a 9-bit signed binary fraction
+  # (1 sign bit + 8 fraction bits, two's complement) as a list of bits for
+  # mb_buildxy, in units of 1/256.
+  #
+  # Coordinates are delta-encoded, so the quantization error of every point
+  # accumulates along a polygon. Use round (not truncate) so the per-point
+  # bias is centered on zero - truncating toward zero drifted large rings
+  # by tens of pixels (e.g. the Southeast rain polygon crept ~20px north).
+  # Building the value directly as a 9-bit two's complement also avoids the
+  # old string-based pitfalls: dropped leading zeros for magnitudes > 0.5,
+  # and a tiny negative encoding as 1_0000_0000 (= -1.0, a full-screen jump).
   def make_bits(fraction) do
-    bitfrac = FractionConverter.decimal_to_binary_fraction(fraction)
-
-    bitstext = cond do
-      fraction < 0 ->
-        {bnum, _remainder} = Integer.parse(bitfrac, 2)
-        bcomp = (bnot(bnum) + 1) &&& 0xff
-        Integer.to_string(bcomp, 2)
-      true ->
-        bitfrac
-    end
-
-    Enum.map(prepend_sign(fraction, to_charlist(bitstext)), &char_to_bit/1)
+    n = round(fraction * 256) |> max(-256) |> min(255)
+    ninebit = n &&& 0x1FF
+    for i <- 8..0//-1, do: ninebit >>> i &&& 1
   end
 
-  def mb_xy(buffer, xys ) when is_list(xys) do
+  def mb_xy(buffer, xys) when is_list(xys) do
     pts_buffer = Enum.map(xys, fn xy -> mb_xy(<<>>, xy) end)
 
     # buffer <> Enum.reduce(pts_buffer, <<>>, &(&2 <> &1))
@@ -97,20 +83,24 @@ defmodule NaplpsWriter do
   def gcu_init(), do: gcu_init(<<>>)
 
   def gcu_init(buffer) do
-
-    init_buffer = <<
-      @cmd_domain,
-      0xC8>>              # 2 dimensions on points, multivalue operands is 3 bytes,
-                         # single value operand is one byte
-      <>
-      mb_xy(<<>>, {1 / 256, 1 / 256}) # pixel width/height of 1/1, in muli-byte format
-      <>
+    # single value operand is one byte
+    # pixel width/height of 1/1, in muli-byte format
+    init_buffer =
       <<
-      @cmd_texture_attr,
-      0xC0,              # Solid Fill, don't draw outline of fills, solid line
-      0xC0, 0xD2, 0xC0,
-      @cmd_shift_in
-    >>
+        @cmd_domain,
+        # 2 dimensions on points, multivalue operands is 3 bytes,
+        0xC8
+      >> <>
+        mb_xy(<<>>, {1 / 256, 1 / 256}) <>
+        <<
+          @cmd_texture_attr,
+          # Solid Fill, don't draw outline of fills, solid line
+          0xC0,
+          0xC0,
+          0xD2,
+          0xC0,
+          @cmd_shift_in
+        >>
 
     buffer <> init_buffer
   end
@@ -123,11 +113,10 @@ defmodule NaplpsWriter do
     buffer
     |> append_byte(command)
     |> mb_xy(points)
-
   end
 
   def draw(buffer, command, point) do
-    draw(buffer, command, [ point ])
+    draw(buffer, command, [point])
   end
 
   def draw_text_raw(buffer, text) do
@@ -151,5 +140,4 @@ defmodule NaplpsWriter do
     default_text_buffer = <<@cmd_text_attr, 0xF0, 0xC0>>
     buffer <> default_text_buffer <> text_size_buffer
   end
-
 end
