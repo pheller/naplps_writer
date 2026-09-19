@@ -115,6 +115,33 @@ defmodule NaplpsTextTest do
       for line <- lines, do: assert(NaplpsText.text_width(5, line) <= 60)
     end
 
+    test "a hyphenated word breaks at its own hyphen, adding nothing" do
+      max = NaplpsText.text_width(6, "a long-") + 0.5
+      assert NaplpsText.wrap("a long-term plan", 6, max) == ["a long-", "term", "plan"]
+    end
+
+    test "a hyphenated word too wide for any line still breaks at its own hyphen" do
+      # Hyphenation off, so this reaches hard_split/4 - which must not add a
+      # second hyphen ("long-t-") when the word has one of its own.
+      max = NaplpsText.text_width(6, "long-") + 0.5
+      assert NaplpsText.wrap("long-term", 6, max, hyphenate: false) == ["long-", "term"]
+    end
+
+    test "a word longer than two lines is wrapped to the end, with no line over-wide" do
+      max = NaplpsText.text_width(6, "abcdefgh")
+
+      for text <- ["Supercalifragilisticexpialidocious", "antidisestablishmentarianism is long"] do
+        lines = NaplpsText.wrap(text, 6, max)
+        assert length(lines) > 2
+
+        for line <- lines, do: assert(NaplpsText.text_width(6, line) <= max)
+
+        # Nothing lost: every letter survives, only hyphens were added.
+        letters = &String.replace(&1, ~r/[\s-]/, "")
+        assert letters.(Enum.join(lines, " ")) == letters.(text)
+      end
+    end
+
     test "collapses runs of whitespace" do
       assert NaplpsText.wrap("a  \n  b", 6, 1000) == ["a b"]
     end
